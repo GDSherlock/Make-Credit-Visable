@@ -8,10 +8,57 @@ from sklearn.metrics import (
     average_precision_score,
     confusion_matrix,
     f1_score,
+    precision_recall_curve,
     precision_score,
     recall_score,
+    roc_curve,
     roc_auc_score,
 )
+
+
+def build_binary_diagnostic_curves(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+) -> dict[str, dict[str, float | list[float]]]:
+    """Build ROC, precision-recall, and KS diagnostics for plotting."""
+
+    y_true_array = np.asarray(y_true)
+    y_score_array = np.asarray(y_score)
+
+    roc_fpr, roc_tpr, roc_thresholds = roc_curve(y_true_array, y_score_array)
+    pr_precision, pr_recall, pr_thresholds = precision_recall_curve(
+        y_true_array,
+        y_score_array,
+    )
+
+    serializable_roc_thresholds = np.where(
+        np.isfinite(roc_thresholds),
+        roc_thresholds,
+        1.0,
+    )
+    ks_values = roc_tpr - roc_fpr
+    ks_index = int(np.argmax(ks_values))
+
+    return {
+        "roc": {
+            "fpr": roc_fpr.tolist(),
+            "tpr": roc_tpr.tolist(),
+            "thresholds": serializable_roc_thresholds.tolist(),
+        },
+        "precision_recall": {
+            "precision": pr_precision.tolist(),
+            "recall": pr_recall.tolist(),
+            "thresholds": pr_thresholds.tolist(),
+        },
+        "ks": {
+            "fpr": roc_fpr.tolist(),
+            "tpr": roc_tpr.tolist(),
+            "thresholds": serializable_roc_thresholds.tolist(),
+            "values": ks_values.tolist(),
+            "statistic": float(ks_values[ks_index]),
+            "threshold": float(serializable_roc_thresholds[ks_index]),
+        },
+    }
 
 
 def evaluate_binary_classifier(

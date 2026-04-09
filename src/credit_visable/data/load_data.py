@@ -1,4 +1,4 @@
-"""Utilities for loading Kaggle tables from the project data directory."""
+"""Utilities for loading configured CSV tables from the project raw data directory."""
 
 from __future__ import annotations
 
@@ -33,6 +33,33 @@ def list_available_tables(
     return available
 
 
+def summarize_table_availability(
+    data_dir: str | Path | None = None,
+    settings: Settings | None = None,
+) -> pd.DataFrame:
+    """Return a one-row-per-table summary of expected raw data availability."""
+
+    resolved_settings = settings or load_settings()
+    resolved_dir = _resolve_data_dir(data_dir)
+
+    rows: list[dict[str, object]] = []
+    for table_name, file_name in resolved_settings.expected_tables.items():
+        candidate = resolved_dir / file_name
+        rows.append(
+            {
+                "table_name": table_name,
+                "file_name": file_name,
+                "resolved_path": str(candidate),
+                "available": candidate.exists(),
+            }
+        )
+
+    return pd.DataFrame(
+        rows,
+        columns=["table_name", "file_name", "resolved_path", "available"],
+    )
+
+
 def load_table(
     table_name: str,
     data_dir: str | Path | None = None,
@@ -43,7 +70,8 @@ def load_table(
 
     Notes
     -----
-    This starter assumes CSV inputs because the Kaggle release is CSV-based.
+    This starter assumes CSV inputs because the repository currently ships a CSV-first
+    raw-data workflow.
     TODO: Extend to parquet or explicit schema validation when the pipeline matures.
     """
 
@@ -55,7 +83,7 @@ def load_table(
     if not file_path.exists():
         raise FileNotFoundError(
             f"Table '{table_name}' was not found at {file_path}. "
-            "Place the Kaggle CSV files under data/raw/."
+            "Place uploaded or local CSV files under data/raw/."
         )
 
     return pd.read_csv(file_path, **read_csv_kwargs)
