@@ -1,6 +1,6 @@
 # credit visable
 
-Lightweight project scaffold for credit risk analytics using the Kaggle **Home Credit Default Risk** dataset.
+Lightweight project scaffold for credit risk analytics using the **Home Credit Default Risk** dataset.
 
 This repository is intentionally structured for iterative work:
 
@@ -46,8 +46,7 @@ credit visable/
 ├── data/
 │   ├── raw/
 │   ├── interim/
-│   ├── processed/
-│   └── external/
+│   └── processed/
 ├── notebooks/
 │   ├── 00_colab_setup.ipynb
 │   ├── 01_eda.ipynb
@@ -83,19 +82,6 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-### Kaggle CLI
-
-Keep the project runtime on Python 3.10. Install the Kaggle CLI outside this
-repository environment, make sure `kaggle` is on your `PATH`, and configure one
-of these authentication methods before downloading competition data:
-
-- `~/.kaggle/kaggle.json`
-- `~/.kaggle/access_token`
-- `KAGGLE_API_TOKEN`
-
-You must also accept the **Home Credit Default Risk** competition rules on the
-Kaggle website before the CLI download will succeed.
-
 ### Quick validation
 
 ```bash
@@ -104,9 +90,9 @@ pytest
 
 ## Data Placement
 
-Project analysis code reads Kaggle CSV files from `data/raw/`.
+Project analysis code reads local CSV files from `data/raw/`.
 
-Expected starter filenames are configured in [`configs/base.yaml`](/Users/kingjason/Desktop/credit%20visable/configs/base.yaml).
+Expected starter filenames are configured in [`configs/base.yaml`](configs/base.yaml).
 
 Example:
 
@@ -116,30 +102,25 @@ data/raw/application_test.csv
 data/raw/bureau.csv
 ```
 
-To download and materialize the dataset into the expected directories:
+Place your uploaded or copied raw tables directly under `data/raw/` before
+running notebooks or modules.
 
-```bash
-python -m credit_visable.data.home_credit_bootstrap
+Common starter files:
+
+```text
+data/raw/application_train.csv
+data/raw/application_test.csv
+data/raw/bureau.csv
+data/raw/bureau_balance.csv
+data/raw/previous_application.csv
+data/raw/installments_payments.csv
+data/raw/credit_card_balance.csv
+data/raw/POS_CASH_balance.csv
 ```
 
-Default behavior:
-
-- original Kaggle artifacts are stored under `data/external/kaggle/home-credit-default-risk/`
-- CSV files used by the project are copied or extracted into `data/raw/`
-- existing files are left untouched unless you pass `--force`
-
-Useful flags:
-
-```bash
-python -m credit_visable.data.home_credit_bootstrap --skip-download
-python -m credit_visable.data.home_credit_bootstrap --force
-python -m credit_visable.data.home_credit_bootstrap --raw-dir /custom/raw/path
-```
-
-The preferred command format follows the current Kaggle CLI syntax
-`kaggle competitions download home-credit-default-risk -p <download_dir>`.
-If your local CLI still documents the older `-c` form, treat that as a
-compatibility alias rather than the primary workflow.
+Additional helper files such as `sample_submission.csv` and
+`HomeCredit_columns_description.csv` may also exist in `data/raw/`, but they
+are not part of the default analysis input set.
 
 ## Running in Colab
 
@@ -159,13 +140,13 @@ Typical Colab flow:
 !pip install -e .
 ```
 
-If you store the Kaggle dataset in Google Drive, mount Drive and copy or point notebook code to the raw data directory before running analysis.
+If you store the dataset in Google Drive, mount Drive and copy or point notebook code to the raw data directory before running analysis.
 
 ## Starter Modules
 
 - `credit_visable.data`: loading tables and basic memory helpers
 - `credit_visable.features`: preprocessing and IV / WOE placeholders
-- `credit_visable.modeling`: baseline training, advanced-model placeholders, evaluation
+- `credit_visable.modeling`: baseline training, optional advanced-model training, evaluation
 - `credit_visable.explainability`: SHAP integration placeholder
 - `credit_visable.governance`: fairness summary placeholder
 - `credit_visable.scoring`: scorecard / PDO placeholder
@@ -184,9 +165,9 @@ If you store the Kaggle dataset in Google Drive, mount Drive and copy or point n
 2. Build reusable preprocessing in `src/credit_visable/features/preprocess.py`.
 3. Implement first-pass IV / WOE utilities for key variables.
 4. Train a logistic regression baseline and track evaluation outputs.
-5. Add tree-based modeling once feature tables are stable.
+5. Tune and extend tree-based modeling beyond the initial Phase 4 advanced baseline.
 6. Extend explainability, fairness, and scorecard modules incrementally.
 
 ## Status
 
-This repository is scaffolding-only. Most domain-specific functions contain `TODO` markers on purpose.
+This repository now includes a starter workflow through Phase 4 advanced modeling. Later stages such as SHAP, fairness auditing, and score scaling still contain scaffold-heavy modules and `TODO` markers on purpose.

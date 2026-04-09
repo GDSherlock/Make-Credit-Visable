@@ -34,8 +34,6 @@ data/interim/*
 !data/interim/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
-data/external/*
-!data/external/.gitkeep
 
 # Model and analysis outputs
 *.pkl

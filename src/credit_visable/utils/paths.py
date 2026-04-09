@@ -30,7 +30,6 @@ class ProjectPaths:
     data_raw: Path
     data_interim: Path
     data_processed: Path
-    data_external: Path
     notebooks: Path
     reports: Path
     reports_figures: Path
@@ -52,7 +51,6 @@ def get_paths() -> ProjectPaths:
         data_raw=data_root / "raw",
         data_interim=data_root / "interim",
         data_processed=data_root / "processed",
-        data_external=data_root / "external",
         notebooks=root / "notebooks",
         reports=reports_root,
         reports_figures=reports_root / "figures",

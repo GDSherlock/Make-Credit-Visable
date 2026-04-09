@@ -5,11 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 import pandas as pd
+from scipy import sparse
 from sklearn.linear_model import LogisticRegression
 
 
 def train_logistic_baseline(
-    X_train: pd.DataFrame,
+    X_train: pd.DataFrame | sparse.spmatrix,
     y_train: pd.Series,
     random_state: int = 42,
     **model_kwargs: Any,
@@ -17,14 +18,18 @@ def train_logistic_baseline(
     """Fit a simple logistic regression baseline.
 
     This is intentionally minimal and assumes preprocessing has already happened.
-    TODO: Wrap this into a reusable training pipeline with validation splits.
+    It supports the sparse CSR matrices produced by the Phase 2 preprocessing
+    workflow as well as dense pandas inputs.
     """
+
+    resolved_model_kwargs = {"solver": "saga"}
+    resolved_model_kwargs.update(model_kwargs)
 
     model = LogisticRegression(
         max_iter=1000,
         class_weight="balanced",
         random_state=random_state,
-        **model_kwargs,
+        **resolved_model_kwargs,
     )
     model.fit(X_train, y_train)
     return model
