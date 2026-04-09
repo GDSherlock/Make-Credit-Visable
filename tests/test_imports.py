@@ -20,7 +20,11 @@ def test_package_imports() -> None:
     from credit_visable.data import load_table, summarize_table_availability
     from credit_visable.explainability import (
         build_transformed_feature_mapping,
+        build_shap_plot_explanation,
+        compute_lime_local_explanations,
         compute_permutation_importance_summary,
+        compute_shap_contribution_summary,
+        compute_shap_local_explanations,
         compute_xgboost_contribution_summary,
         compute_xgboost_local_explanations,
         get_explainability_runtime_status,
@@ -57,7 +61,7 @@ def test_package_imports() -> None:
         train_tree_model_placeholder,
     )
     from credit_visable.scoring import build_scorecard_placeholder
-    from credit_visable.utils import get_paths
+    from credit_visable.utils import REPORT_SANS_SERIF_STACK, apply_report_style, get_paths
 
     assert credit_visable.__version__ == "0.1.0"
     assert callable(load_table)
@@ -81,7 +85,11 @@ def test_package_imports() -> None:
     assert callable(evaluate_binary_classifier)
     assert callable(run_shap_placeholder)
     assert callable(build_transformed_feature_mapping)
+    assert callable(build_shap_plot_explanation)
+    assert callable(compute_lime_local_explanations)
     assert callable(compute_permutation_importance_summary)
+    assert callable(compute_shap_contribution_summary)
+    assert callable(compute_shap_local_explanations)
     assert callable(compute_xgboost_contribution_summary)
     assert callable(compute_xgboost_local_explanations)
     assert callable(get_explainability_runtime_status)
@@ -93,4 +101,6 @@ def test_package_imports() -> None:
     assert callable(collapse_rare_categories)
     assert callable(derive_age_band_from_days_birth)
     assert callable(build_scorecard_placeholder)
+    assert callable(apply_report_style)
+    assert REPORT_SANS_SERIF_STACK[0] == "DejaVu Sans"
     assert callable(get_paths)
