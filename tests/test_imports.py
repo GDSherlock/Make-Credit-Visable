@@ -37,8 +37,11 @@ def test_package_imports() -> None:
         PreparedPreprocessingArtifacts,
         PreprocessingOptions,
         build_basic_preprocessor,
+        build_feature_catalog,
         build_feature_set_manifest,
+        build_preprocessing_decision_manifest,
         compute_iv_summary,
+        compute_woe_detail,
         is_proxy_feature,
         prepare_preprocessing_artifacts,
         resolve_feature_set_columns,
@@ -46,6 +49,7 @@ def test_package_imports() -> None:
         select_feature_set_frame,
     )
     from credit_visable.governance import (
+        build_group_fairness_metric_summary,
         build_group_fairness_summary,
         build_grouped_operational_summary,
         collapse_rare_categories,
@@ -60,8 +64,22 @@ def test_package_imports() -> None:
         train_tree_model,
         train_tree_model_placeholder,
     )
-    from credit_visable.scoring import build_scorecard_placeholder
-    from credit_visable.utils import REPORT_SANS_SERIF_STACK, apply_report_style, get_paths
+    from credit_visable.scoring import (
+        build_profit_assumption_config,
+        build_scorecard_placeholder,
+        compute_threshold_profit_curve,
+        select_optimal_profit_threshold,
+    )
+    from credit_visable.utils import (
+        REPORT_COLOR_PALETTE,
+        REPORT_SANS_SERIF_STACK,
+        add_conclusion_annotation,
+        apply_report_style,
+        build_report_summary_fields,
+        format_percent_axis,
+        get_paths,
+        to_builtin,
+    )
 
     assert credit_visable.__version__ == "0.1.0"
     assert callable(load_table)
@@ -70,8 +88,11 @@ def test_package_imports() -> None:
     assert PreparedPreprocessingArtifacts.__name__ == "PreparedPreprocessingArtifacts"
     assert FEATURE_SET_NAMES == ("traditional_core", "traditional_plus_proxy")
     assert callable(build_basic_preprocessor)
+    assert callable(build_feature_catalog)
     assert callable(build_feature_set_manifest)
+    assert callable(build_preprocessing_decision_manifest)
     assert callable(compute_iv_summary)
+    assert callable(compute_woe_detail)
     assert callable(is_proxy_feature)
     assert callable(prepare_preprocessing_artifacts)
     assert callable(resolve_feature_set_columns)
@@ -96,11 +117,20 @@ def test_package_imports() -> None:
     assert callable(select_local_explanation_rows)
     assert callable(summarize_contribution_values)
     assert callable(fairness_report_placeholder)
+    assert callable(build_group_fairness_metric_summary)
     assert callable(build_group_fairness_summary)
     assert callable(build_grouped_operational_summary)
     assert callable(collapse_rare_categories)
     assert callable(derive_age_band_from_days_birth)
+    assert callable(build_profit_assumption_config)
     assert callable(build_scorecard_placeholder)
+    assert callable(compute_threshold_profit_curve)
+    assert callable(select_optimal_profit_threshold)
+    assert callable(add_conclusion_annotation)
     assert callable(apply_report_style)
+    assert callable(build_report_summary_fields)
+    assert callable(format_percent_axis)
     assert REPORT_SANS_SERIF_STACK[0] == "DejaVu Sans"
+    assert REPORT_COLOR_PALETTE["good"] == "#4C78A8"
     assert callable(get_paths)
+    assert callable(to_builtin)

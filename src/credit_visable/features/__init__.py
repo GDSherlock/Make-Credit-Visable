@@ -11,11 +11,18 @@ from credit_visable.features.feature_sets import (
     select_feature_set_frame,
     validate_feature_set_name,
 )
-from credit_visable.features.iv_woe import compute_iv_summary, fit_woe_placeholder
+from credit_visable.features.iv_woe import (
+    compute_iv_summary,
+    compute_woe_detail,
+    compute_woe_details,
+    fit_woe_placeholder,
+)
 from credit_visable.features.preprocess import (
     PreparedPreprocessingArtifacts,
     PreprocessingOptions,
     build_basic_preprocessor,
+    build_feature_catalog,
+    build_preprocessing_decision_manifest,
     prepare_preprocessing_artifacts,
     save_preprocessing_artifacts,
     split_feature_types,
@@ -28,8 +35,12 @@ __all__ = [
     "PreparedPreprocessingArtifacts",
     "PreprocessingOptions",
     "build_basic_preprocessor",
+    "build_feature_catalog",
     "build_feature_set_manifest",
     "compute_iv_summary",
+    "compute_woe_detail",
+    "compute_woe_details",
+    "build_preprocessing_decision_manifest",
     "fit_woe_placeholder",
     "is_proxy_feature",
     "list_supported_feature_sets",

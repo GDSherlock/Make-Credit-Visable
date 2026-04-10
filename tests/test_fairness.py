@@ -14,6 +14,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from credit_visable.governance import (
+    build_group_fairness_metric_summary,
     build_group_fairness_summary,
     build_grouped_operational_summary,
     collapse_rare_categories,
@@ -125,3 +126,52 @@ def test_build_group_fairness_summary_handles_age_bands_and_top_categories() -> 
     assert "OrgA" in organization_groups
     assert "Other" in organization_groups
     assert "Missing" in organization_groups
+
+
+def test_build_group_fairness_metric_summary_returns_regulator_style_metrics() -> None:
+    frame = pd.DataFrame(
+        {
+            "TARGET": [0, 0, 1, 1, 0, 1, 0, 1],
+            "predicted_pd": [0.10, 0.20, 0.30, 0.80, 0.15, 0.65, 0.55, 0.40],
+            "NAME_FAMILY_STATUS": [
+                "Married",
+                "Married",
+                "Married",
+                "Married",
+                "Single",
+                "Single",
+                "Single",
+                "Single",
+            ],
+        }
+    )
+    group_specs = [
+        {
+            "protected_attribute": "family_status_group",
+            "source_column": "NAME_FAMILY_STATUS",
+            "group_column": "family_status_group",
+            "kind": "identity",
+        }
+    ]
+
+    summary = build_group_fairness_metric_summary(
+        frame=frame,
+        target_column="TARGET",
+        score_column="predicted_pd",
+        group_specs=group_specs,
+        threshold=0.5,
+    )
+
+    assert set(summary.columns) >= {
+        "protected_attribute",
+        "demographic_parity_diff",
+        "demographic_parity_ratio",
+        "approval_disparity_ratio",
+        "equal_opportunity_diff",
+        "equalized_odds_gap",
+    }
+    row = summary.iloc[0]
+    assert row["protected_attribute"] == "family_status_group"
+    assert row["demographic_parity_diff"] >= 0.0
+    assert 0.0 <= row["demographic_parity_ratio"] <= 1.0
+    assert row["equalized_odds_gap"] >= 0.0

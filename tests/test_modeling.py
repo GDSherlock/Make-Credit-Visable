@@ -58,6 +58,8 @@ def test_evaluate_binary_classifier_preserves_public_metric_fields() -> None:
     assert set(metrics) == {
         "roc_auc",
         "average_precision",
+        "brier_score",
+        "positive_rate_baseline",
         "accuracy",
         "precision",
         "recall",
@@ -75,7 +77,7 @@ def test_build_binary_diagnostic_curves_returns_plot_ready_payloads() -> None:
 
     curves = build_binary_diagnostic_curves(y_true, y_score)
 
-    assert set(curves) == {"roc", "precision_recall", "ks"}
+    assert set(curves) == {"roc", "precision_recall", "ks", "calibration", "gain", "lift"}
     assert len(curves["roc"]["fpr"]) == len(curves["roc"]["tpr"])
     assert len(curves["roc"]["thresholds"]) == len(curves["roc"]["fpr"])
     assert len(curves["precision_recall"]["precision"]) == len(
@@ -87,6 +89,9 @@ def test_build_binary_diagnostic_curves_returns_plot_ready_payloads() -> None:
     assert len(curves["ks"]["values"]) == len(curves["ks"]["thresholds"])
     assert 0.0 <= curves["ks"]["statistic"] <= 1.0
     assert 0.0 <= curves["ks"]["threshold"] <= 1.0
+    assert len(curves["calibration"]["bin_index"]) == len(curves["calibration"]["predicted_mean"])
+    assert len(curves["gain"]["population_share"]) == len(curves["gain"]["captured_bad_share"])
+    assert len(curves["lift"]["population_share"]) == len(curves["lift"]["lift"])
 
 
 def test_get_tree_backend_availability_prefers_lightgbm_when_installed(

@@ -15,6 +15,14 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+from credit_visable.features.feature_sets import (
+    FEATURE_SET_TRADITIONAL_CORE,
+    FEATURE_SET_TRADITIONAL_PLUS_PROXY,
+    is_proxy_feature,
+    resolve_feature_set_columns,
+    validate_feature_set_name,
+)
+from credit_visable.features.iv_woe import compute_iv_summary
 from credit_visable.utils.paths import get_paths
 
 
@@ -97,6 +105,147 @@ def split_feature_types(
     return {
         "numeric": numeric_features,
         "categorical": categorical_features,
+    }
+
+
+def build_feature_catalog(
+    frame: pd.DataFrame,
+    target_column: str,
+    id_column: str | None = None,
+    bins: int = 10,
+    iv_summary: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Build a feature-level catalog for Phase 2 documentation and reviews."""
+
+    feature_groups = split_feature_types(
+        frame,
+        target_column=target_column,
+        id_column=id_column,
+    )
+    numeric_features = set(feature_groups["numeric"])
+    categorical_features = set(feature_groups["categorical"])
+    selected_core = set(
+        resolve_feature_set_columns(
+            frame.columns.tolist(),
+            feature_set_name=FEATURE_SET_TRADITIONAL_CORE,
+            target_column=target_column,
+            id_column=id_column,
+        )
+    )
+    selected_plus_proxy = set(
+        resolve_feature_set_columns(
+            frame.columns.tolist(),
+            feature_set_name=FEATURE_SET_TRADITIONAL_PLUS_PROXY,
+            target_column=target_column,
+            id_column=id_column,
+        )
+    )
+
+    iv_lookup = pd.Series(dtype=float)
+    if iv_summary is None:
+        iv_summary = compute_iv_summary(frame, target_column=target_column, bins=bins)
+    if not iv_summary.empty and {"feature", "iv"}.issubset(iv_summary.columns):
+        iv_lookup = iv_summary.set_index("feature")["iv"]
+
+    rows = []
+    feature_columns = [
+        column
+        for column in frame.columns
+        if column not in {target_column, id_column}
+    ]
+    for feature_name in feature_columns:
+        series = frame[feature_name]
+        feature_family = (
+            "numeric"
+            if feature_name in numeric_features
+            else "categorical"
+            if feature_name in categorical_features
+            else "other"
+        )
+        rows.append(
+            {
+                "feature": feature_name,
+                "feature_family": feature_family,
+                "dtype": str(series.dtype),
+                "missing_share": float(series.isna().mean()),
+                "nunique_non_missing": int(series.nunique(dropna=True)),
+                "is_proxy_feature": bool(is_proxy_feature(feature_name)),
+                "included_in_traditional_core": feature_name in selected_core,
+                "included_in_traditional_plus_proxy": feature_name in selected_plus_proxy,
+                "iv": float(iv_lookup.get(feature_name, float("nan"))),
+            }
+        )
+
+    catalog = pd.DataFrame(rows)
+    if catalog.empty:
+        return catalog
+
+    return catalog.sort_values(
+        by=["is_proxy_feature", "iv", "feature"],
+        ascending=[True, False, True],
+        na_position="last",
+    ).reset_index(drop=True)
+
+
+def build_preprocessing_decision_manifest(
+    frame: pd.DataFrame,
+    feature_set_name: str,
+    target_column: str,
+    id_column: str | None = None,
+    options: PreprocessingOptions | None = None,
+    feature_catalog: pd.DataFrame | None = None,
+) -> dict[str, object]:
+    """Describe feature-selection and preprocessing decisions for one feature set."""
+
+    resolved_feature_set = validate_feature_set_name(feature_set_name)
+    resolved_options = options or PreprocessingOptions()
+    selected_features = resolve_feature_set_columns(
+        frame.columns.tolist(),
+        feature_set_name=resolved_feature_set,
+        target_column=target_column,
+        id_column=id_column,
+    )
+
+    if feature_catalog is None:
+        feature_catalog = build_feature_catalog(
+            frame=frame,
+            target_column=target_column,
+            id_column=id_column,
+        )
+
+    selected_catalog = feature_catalog.loc[
+        feature_catalog["feature"].isin(selected_features)
+    ].copy()
+    numeric_count = int((selected_catalog["feature_family"] == "numeric").sum())
+    categorical_count = int((selected_catalog["feature_family"] == "categorical").sum())
+    proxy_count = int(selected_catalog["is_proxy_feature"].sum())
+
+    return {
+        "feature_set_name": resolved_feature_set,
+        "target_column": target_column,
+        "id_column": id_column,
+        "selected_feature_count": len(selected_features),
+        "numeric_feature_count": numeric_count,
+        "categorical_feature_count": categorical_count,
+        "proxy_feature_count": proxy_count,
+        "traditional_feature_count": len(selected_features) - proxy_count,
+        "missing_indicator_enabled": False,
+        "numeric_imputation_strategy": "median",
+        "categorical_imputation_strategy": "most_frequent",
+        "categorical_encoding": "one_hot_infrequent_if_exist",
+        "rare_category_min_frequency": resolved_options.rare_category_min_frequency,
+        "numeric_scaling_enabled": bool(resolved_options.scale_numeric),
+        "numeric_clip_quantiles": list(resolved_options.clip_quantiles)
+        if resolved_options.clip_quantiles is not None
+        else None,
+        "selected_features": selected_features,
+        "top_iv_features": selected_catalog.sort_values("iv", ascending=False, na_position="last")
+        .head(10)["feature"]
+        .tolist(),
+        "notes": [
+            "Phase 2 keeps the raw application-table feature regime and does not yet apply WOE transforms.",
+            "Missing indicators remain disabled in the default preprocessing pipeline.",
+        ],
     }
 
 

@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from scipy import sparse
-from sklearn.inspection import permutation_importance
+from sklearn.inspection import partial_dependence, permutation_importance
 
 from credit_visable.features.feature_sets import is_proxy_feature
 
@@ -546,6 +546,144 @@ def compute_permutation_importance_summary(
         }
     )
     return summary
+
+
+def compute_top_interaction_pairs(
+    feature_contribution_values: np.ndarray,
+    feature_names: list[str] | pd.Series,
+    raw_feature_candidates: list[str] | None = None,
+    top_n: int = 10,
+    candidate_feature_limit: int = 15,
+) -> pd.DataFrame:
+    """Approximate top interaction pairs from SHAP-like contribution values."""
+
+    contribution_array = np.asarray(feature_contribution_values, dtype=float)
+    if contribution_array.ndim != 2:
+        raise ValueError("feature_contribution_values must be a 2D array.")
+    if contribution_array.shape[1] < 2:
+        return pd.DataFrame(
+            columns=[
+                "interaction_rank",
+                "left_feature",
+                "right_feature",
+                "left_raw_feature",
+                "right_raw_feature",
+                "interaction_strength",
+            ]
+        )
+
+    mapping = build_transformed_feature_mapping(
+        feature_names=feature_names,
+        raw_feature_candidates=raw_feature_candidates,
+    )
+    mean_abs = np.abs(contribution_array).mean(axis=0)
+    candidate_indices = np.argsort(-mean_abs)[: max(2, int(candidate_feature_limit))]
+
+    rows = []
+    for left_position, left_index in enumerate(candidate_indices):
+        for right_index in candidate_indices[left_position + 1 :]:
+            strength = float(
+                np.mean(np.abs(contribution_array[:, left_index] * contribution_array[:, right_index]))
+            )
+            rows.append(
+                {
+                    "left_feature": mapping.iloc[left_index]["transformed_feature_name"],
+                    "right_feature": mapping.iloc[right_index]["transformed_feature_name"],
+                    "left_raw_feature": mapping.iloc[left_index]["raw_feature_name"],
+                    "right_raw_feature": mapping.iloc[right_index]["raw_feature_name"],
+                    "interaction_strength": strength,
+                }
+            )
+
+    interaction_frame = (
+        pd.DataFrame(rows)
+        .sort_values("interaction_strength", ascending=False)
+        .head(top_n)
+        .reset_index(drop=True)
+    )
+    if interaction_frame.empty:
+        return interaction_frame
+    interaction_frame.insert(
+        0,
+        "interaction_rank",
+        np.arange(1, len(interaction_frame) + 1),
+    )
+    return interaction_frame
+
+
+def compute_partial_dependence_frame(
+    model: Any,
+    X_matrix: pd.DataFrame | np.ndarray | sparse.spmatrix,
+    feature_names: list[str] | pd.Series,
+    feature: str | int,
+    grid_resolution: int = 20,
+) -> pd.DataFrame:
+    """Compute a simple partial dependence frame for one feature."""
+
+    feature_name_list = (
+        feature_names.astype(str).tolist()
+        if isinstance(feature_names, pd.Series)
+        else [str(item) for item in feature_names]
+    )
+    if isinstance(feature, str):
+        if feature not in feature_name_list:
+            raise KeyError(f"Feature not found in feature_names: {feature}")
+        feature_index = feature_name_list.index(feature)
+        feature_label = feature
+    else:
+        feature_index = int(feature)
+        feature_label = feature_name_list[feature_index]
+
+    try:
+        result = partial_dependence(
+            estimator=model,
+            X=X_matrix,
+            features=[feature_index],
+            grid_resolution=grid_resolution,
+        )
+        grid_values = np.asarray(result["grid_values"][0], dtype=float)
+        average_values = np.asarray(result["average"][0], dtype=float)
+    except Exception:
+        feature_column = X_matrix[:, feature_index]
+        if sparse.issparse(feature_column):
+            feature_values = np.asarray(feature_column.toarray()).reshape(-1)
+        else:
+            feature_values = np.asarray(feature_column).reshape(-1)
+
+        feature_values = feature_values[np.isfinite(feature_values)]
+        if feature_values.size == 0:
+            grid_values = np.asarray([0.0], dtype=float)
+        else:
+            unique_values = np.unique(feature_values.astype(float))
+            if unique_values.size <= grid_resolution:
+                grid_values = unique_values
+            else:
+                quantile_grid = np.linspace(0.05, 0.95, grid_resolution)
+                grid_values = np.unique(np.quantile(unique_values, quantile_grid))
+
+        if sparse.issparse(X_matrix):
+            working_matrix = X_matrix.toarray()
+        else:
+            working_matrix = np.asarray(X_matrix).copy()
+
+        average_values = []
+        for grid_value in grid_values:
+            working_matrix[:, feature_index] = grid_value
+            if hasattr(model, "predict_proba"):
+                response = np.asarray(model.predict_proba(working_matrix))
+                response_values = response[:, 1] if response.ndim == 2 and response.shape[1] > 1 else response.reshape(-1)
+            else:
+                response_values = np.asarray(model.predict(working_matrix)).reshape(-1)
+            average_values.append(float(np.mean(response_values)))
+        average_values = np.asarray(average_values, dtype=float)
+
+    return pd.DataFrame(
+        {
+            "feature": feature_label,
+            "feature_value": grid_values,
+            "partial_dependence": average_values,
+        }
+    )
 
 
 def select_local_explanation_rows(

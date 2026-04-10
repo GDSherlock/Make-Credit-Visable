@@ -248,3 +248,143 @@ def build_group_fairness_summary(
         return pd.DataFrame()
 
     return pd.concat(outputs, ignore_index=True)
+
+
+def _build_group_decision_detail(
+    frame: pd.DataFrame,
+    group_column: str,
+    target_column: str,
+    score_column: str,
+    threshold: float,
+) -> pd.DataFrame:
+    working = frame[[group_column, target_column, score_column]].copy()
+    working[group_column] = working[group_column].astype("object").fillna("Missing")
+    working[target_column] = pd.to_numeric(working[target_column], errors="coerce")
+    working[score_column] = pd.to_numeric(working[score_column], errors="coerce")
+    working = working.dropna(subset=[target_column, score_column])
+    working["approved_flag"] = (working[score_column] < threshold).astype(int)
+    working["good_flag"] = (working[target_column] == 0).astype(int)
+    working["bad_flag"] = (working[target_column] == 1).astype(int)
+
+    grouped = (
+        working.groupby(group_column, dropna=False, observed=False)
+        .agg(
+            count=(target_column, "size"),
+            approval_rate=("approved_flag", "mean"),
+            good_count=("good_flag", "sum"),
+            bad_count=("bad_flag", "sum"),
+        )
+        .reset_index()
+        .rename(columns={group_column: "group"})
+    )
+
+    group_rows = []
+    for group_value, subset in working.groupby(group_column, dropna=False, observed=False):
+        good_mask = subset[target_column] == 0
+        bad_mask = subset[target_column] == 1
+        true_positive_rate = (
+            float(subset.loc[good_mask, "approved_flag"].mean()) if good_mask.any() else np.nan
+        )
+        false_positive_rate = (
+            float(subset.loc[bad_mask, "approved_flag"].mean()) if bad_mask.any() else np.nan
+        )
+        group_rows.append(
+            {
+                "group": group_value,
+                "true_positive_rate_for_goods": true_positive_rate,
+                "false_positive_rate_for_bads": false_positive_rate,
+            }
+        )
+
+    detail = grouped.merge(pd.DataFrame(group_rows), on="group", how="left")
+    detail["approval_rate"] = detail["approval_rate"].astype(float)
+    return detail
+
+
+def _safe_gap(values: pd.Series) -> float:
+    clean_values = pd.to_numeric(values, errors="coerce").dropna()
+    if clean_values.empty:
+        return float("nan")
+    return float(clean_values.max() - clean_values.min())
+
+
+def _safe_ratio(values: pd.Series) -> float:
+    clean_values = pd.to_numeric(values, errors="coerce").dropna()
+    if clean_values.empty:
+        return float("nan")
+    max_value = float(clean_values.max())
+    min_value = float(clean_values.min())
+    if max_value <= 0:
+        return float("nan")
+    return float(min_value / max_value)
+
+
+def build_group_fairness_metric_summary(
+    frame: pd.DataFrame,
+    target_column: str,
+    score_column: str,
+    group_specs: list[dict[str, Any]],
+    threshold: float = 0.5,
+    top_n_categories: int = 8,
+) -> pd.DataFrame:
+    """Summarize regulator-style fairness metrics for configured groups.
+
+    The fairness lens here treats approval as the positive decision and
+    ``TARGET == 0`` as the favorable ground-truth outcome.
+    """
+
+    if target_column not in frame.columns:
+        raise KeyError(f"Target column not found: {target_column}")
+    if score_column not in frame.columns:
+        raise KeyError(f"Score column not found: {score_column}")
+
+    working = frame.copy()
+    outputs: list[dict[str, Any]] = []
+
+    for spec in group_specs:
+        protected_attribute = spec["protected_attribute"]
+        group_column, grouped = _prepare_group_series(
+            working,
+            spec=spec,
+            top_n_categories=top_n_categories,
+        )
+        working[group_column] = grouped
+        detail = _build_group_decision_detail(
+            working,
+            group_column=group_column,
+            target_column=target_column,
+            score_column=score_column,
+            threshold=threshold,
+        )
+        if detail.empty:
+            continue
+
+        approval_rates = detail["approval_rate"]
+        best_group_row = detail.loc[approval_rates.idxmax()]
+        worst_group_row = detail.loc[approval_rates.idxmin()]
+        equal_opportunity_diff = _safe_gap(detail["true_positive_rate_for_goods"])
+        false_positive_rate_diff = _safe_gap(detail["false_positive_rate_for_bads"])
+
+        outputs.append(
+            {
+                "protected_attribute": protected_attribute,
+                "group_column": group_column,
+                "source_column": spec["source_column"],
+                "group_count": int(detail["group"].nunique(dropna=False)),
+                "threshold": float(threshold),
+                "best_approval_group": best_group_row["group"],
+                "best_approval_rate": float(best_group_row["approval_rate"]),
+                "worst_approval_group": worst_group_row["group"],
+                "worst_approval_rate": float(worst_group_row["approval_rate"]),
+                "demographic_parity_diff": _safe_gap(approval_rates),
+                "demographic_parity_ratio": _safe_ratio(approval_rates),
+                "approval_disparity_ratio": _safe_ratio(approval_rates),
+                "equal_opportunity_diff": equal_opportunity_diff,
+                "false_positive_rate_diff": false_positive_rate_diff,
+                "equalized_odds_gap": float(
+                    np.nanmax([equal_opportunity_diff, false_positive_rate_diff])
+                ),
+            }
+        )
+
+    return pd.DataFrame(outputs)
