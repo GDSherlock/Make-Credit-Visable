@@ -17,9 +17,11 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from credit_visable.modeling import (
+    GovernedTreeTrainingOptions,
     build_binary_diagnostic_curves,
     evaluate_binary_classifier,
     get_tree_backend_availability,
+    train_governed_tree_model,
     train_logistic_baseline,
     train_tree_model,
     train_tree_model_placeholder,
@@ -57,8 +59,14 @@ def test_evaluate_binary_classifier_preserves_public_metric_fields() -> None:
 
     assert set(metrics) == {
         "roc_auc",
+        "gini",
         "average_precision",
+        "ks_statistic",
+        "ks_threshold",
         "brier_score",
+        "calibration_slope",
+        "calibration_intercept",
+        "max_abs_decile_gap",
         "positive_rate_baseline",
         "accuracy",
         "precision",
@@ -69,6 +77,7 @@ def test_evaluate_binary_classifier_preserves_public_metric_fields() -> None:
     }
     assert metrics["threshold"] == 0.5
     assert metrics["confusion_matrix"] == [[2, 0], [1, 1]]
+    assert metrics["gini"] == (2 * metrics["roc_auc"]) - 1
 
 
 def test_build_binary_diagnostic_curves_returns_plot_ready_payloads() -> None:
@@ -207,3 +216,63 @@ def test_train_tree_model_placeholder_reports_backend_readiness(monkeypatch) -> 
     assert summary["preferred_backend"] == "xgboost"
     assert summary["model_kwargs"] == {"max_depth": 4}
     assert "train_tree_model" in summary["notes"]
+
+
+def test_train_governed_tree_model_returns_cv_summary(monkeypatch) -> None:
+    fitted_calls = []
+
+    class FakeGovernedXGBClassifier:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def fit(self, X, y, **fit_kwargs):
+            fitted_calls.append(
+                {
+                    "rows": len(y),
+                    "fit_kwargs": fit_kwargs,
+                }
+            )
+            return self
+
+        def predict_proba(self, X):
+            positive_class = np.clip(np.linspace(0.1, 0.9, X.shape[0]), 0.01, 0.99)
+            return np.column_stack([1.0 - positive_class, positive_class])
+
+    monkeypatch.setattr(
+        tree_model_helpers,
+        "_is_backend_installed",
+        lambda backend_name: backend_name == "xgboost",
+    )
+    monkeypatch.setattr(
+        tree_model_helpers,
+        "_load_tree_estimator_class",
+        lambda backend_name: FakeGovernedXGBClassifier,
+    )
+
+    X, y = make_classification(
+        n_samples=150,
+        n_features=12,
+        n_informative=6,
+        n_redundant=2,
+        weights=[0.7, 0.3],
+        random_state=42,
+    )
+    result = train_governed_tree_model(
+        sparse.csr_matrix(X),
+        pd.Series(y),
+        options=GovernedTreeTrainingOptions(
+            cv_folds=3,
+            early_stopping_rounds=10,
+            internal_validation_size=0.2,
+            param_grid=(
+                {"n_estimators": 50, "max_depth": 3},
+                {"n_estimators": 75, "max_depth": 4},
+            ),
+        ),
+    )
+
+    assert result["backend_name"] == "xgboost"
+    assert not result["cv_results"].empty
+    assert "mean_roc_auc" in result["cv_results"].columns
+    assert set(result["development_metrics"]) == {"roc_auc", "average_precision", "brier_score"}
+    assert fitted_calls

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -190,13 +191,37 @@ def evaluate_binary_classifier(
     y_true_array = np.asarray(y_true)
     y_score_array = np.asarray(y_score)
     y_pred = (y_score_array >= threshold).astype(int)
+    diagnostic_curves = build_binary_diagnostic_curves(y_true_array, y_score_array)
+    calibration_table = diagnostic_curves["calibration"]
+    calibration_gap_values = [
+        abs(float(predicted_mean) - float(observed_rate))
+        for predicted_mean, observed_rate in zip(
+            calibration_table["predicted_mean"],
+            calibration_table["observed_rate"],
+        )
+    ]
+
+    calibration_slope = np.nan
+    calibration_intercept = np.nan
+    clipped_scores = np.clip(y_score_array, 1e-6, 1.0 - 1e-6)
+    if np.unique(y_true_array).size >= 2:
+        slope_model = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000)
+        slope_model.fit(np.log(clipped_scores / (1.0 - clipped_scores)).reshape(-1, 1), y_true_array)
+        calibration_slope = float(slope_model.coef_[0][0])
+        calibration_intercept = float(slope_model.intercept_[0])
 
     return {
         "roc_auc": float(roc_auc_score(y_true_array, y_score_array)),
+        "gini": float((2.0 * roc_auc_score(y_true_array, y_score_array)) - 1.0),
         "average_precision": float(
             average_precision_score(y_true_array, y_score_array)
         ),
+        "ks_statistic": float(diagnostic_curves["ks"]["statistic"]),
+        "ks_threshold": float(diagnostic_curves["ks"]["threshold"]),
         "brier_score": float(brier_score_loss(y_true_array, y_score_array)),
+        "calibration_slope": calibration_slope,
+        "calibration_intercept": calibration_intercept,
+        "max_abs_decile_gap": float(max(calibration_gap_values, default=0.0)),
         "positive_rate_baseline": float(y_true_array.mean()),
         "accuracy": float(accuracy_score(y_true_array, y_pred)),
         "precision": float(precision_score(y_true_array, y_pred, zero_division=0)),

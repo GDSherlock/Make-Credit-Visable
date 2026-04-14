@@ -2,6 +2,7 @@ project_name: "credit visable"
 random_state: 42
 target_column: "TARGET"
 id_column: "SK_ID_CURR"
+scorecard_config: "scorecard.yaml"
 expected_tables:
   application_train: "application_train.csv"
   application_test: "application_test.csv"

@@ -16,6 +16,9 @@ dependencies = [
     "seaborn",
     "jupyter",
     "pyyaml",
+    "python-docx",
+    "xgboost",
+    "shap",
 ]
 
 [tool.setuptools]

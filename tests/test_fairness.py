@@ -17,6 +17,7 @@ from credit_visable.governance import (
     build_group_fairness_metric_summary,
     build_group_fairness_summary,
     build_grouped_operational_summary,
+    build_monitoring_baseline,
     collapse_rare_categories,
     derive_age_band_from_days_birth,
 )
@@ -175,3 +176,44 @@ def test_build_group_fairness_metric_summary_returns_regulator_style_metrics() -
     assert row["demographic_parity_diff"] >= 0.0
     assert 0.0 <= row["demographic_parity_ratio"] <= 1.0
     assert row["equalized_odds_gap"] >= 0.0
+
+
+def test_build_monitoring_baseline_reports_drift() -> None:
+    reference = pd.DataFrame(
+        {
+            "TARGET": [0, 0, 1, 1],
+            "calibrated_pd": [0.05, 0.10, 0.25, 0.35],
+            "score": [680, 650, 560, 520],
+            "family_status_group": ["Married", "Married", "Single", "Single"],
+        }
+    )
+    comparison = pd.DataFrame(
+        {
+            "TARGET": [0, 1, 1, 1],
+            "calibrated_pd": [0.08, 0.18, 0.28, 0.40],
+            "score": [665, 610, 545, 500],
+            "family_status_group": ["Married", "Married", "Single", "Single"],
+        }
+    )
+
+    monitoring = build_monitoring_baseline(
+        reference_frame=reference,
+        comparison_frame=comparison,
+        target_column="TARGET",
+        calibrated_pd_column="calibrated_pd",
+        score_column="score",
+        group_specs=[
+            {
+                "protected_attribute": "family_status_group",
+                "source_column": "family_status_group",
+                "group_column": "family_status_group",
+                "kind": "identity",
+            }
+        ],
+        threshold=0.3,
+    )
+
+    assert "summary" in monitoring
+    assert monitoring["summary"]["comparison_population_size"] == 4
+    assert "score_psi" in monitoring["summary"]["calibration_monitoring"]
+    assert not monitoring["fairness_drift"].empty

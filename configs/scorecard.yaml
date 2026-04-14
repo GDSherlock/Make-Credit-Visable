@@ -1,0 +1,118 @@
+scorecard_type: hybrid_xgboost_pdo
+champion_model: xgboost_traditional_plus_proxy
+
+scaling:
+  pdo: 40
+  base_score: 600
+  base_odds: 20.0
+
+calibration:
+  method: platt
+  fit_dataset: calibration
+  monitor_dataset: holdout_test
+  refit_frequency: quarterly
+  monitoring:
+    brier_score_max_drift: 0.01
+    calibration_slope_min: 0.90
+    calibration_slope_max: 1.10
+    calibration_intercept_abs_max: 0.05
+    max_abs_decile_gap: 0.02
+    score_psi_warn: 0.10
+    score_psi_fail: 0.25
+
+risk_bands:
+  construction: frozen_development_thresholds
+  minimum_band_share: 0.05
+  target_population_shares:
+    A: 0.30
+    B: 0.25
+    C: 0.20
+    D: 0.15
+    E: 0.10
+  thresholds:
+    A:
+      max_calibrated_pd: 0.02
+      min_score: 650
+    B:
+      max_calibrated_pd: 0.04
+      min_score: 610
+    C:
+      max_calibrated_pd: 0.07
+      min_score: 575
+    D:
+      max_calibrated_pd: 0.12
+      min_score: 540
+    E:
+      max_calibrated_pd: 1.00
+      min_score: 0
+
+cutoff_strategy:
+  objective: maximize_expected_value
+  review_buffer_points: 10
+  guardrails:
+    max_approved_book_bad_rate: 0.07
+    max_manual_review_share: 0.15
+    min_approval_rate: 0.25
+  final_cutoff_rule: optimal_cutoff_under_guardrails
+
+unit_economics:
+  data_drivers:
+    principal: AMT_CREDIT
+    payment: AMT_ANNUITY
+    annual_income: AMT_INCOME_TOTAL
+    goods_price: AMT_GOODS_PRICE
+  derived_variables:
+    monthly_income_proxy: "AMT_INCOME_TOTAL / 12"
+    term_proxy_months: "clip(AMT_CREDIT / AMT_ANNUITY, 6, 48)"
+    payment_burden: "clip(AMT_ANNUITY / monthly_income_proxy, 0.05, 0.60)"
+    advance_ratio: "clip(AMT_CREDIT / coalesce(AMT_GOODS_PRICE, AMT_CREDIT), 0.80, 1.50)"
+  assumptions:
+    net_margin_rate_annual: 0.14
+    ead_rate: 0.85
+    base_lgd: 0.75
+    burden_lgd_slope: 0.25
+    advance_lgd_slope: 0.10
+    reject_good_capture: 0.70
+    reject_bad_loss_avoidance: 0.85
+  payoffs:
+    lgd: "clip(base_lgd + burden_lgd_slope * max(payment_burden - 0.20, 0) + advance_lgd_slope * max(advance_ratio - 1.0, 0), 0.65, 0.90)"
+    approve_good: "AMT_CREDIT * net_margin_rate_annual * (term_proxy_months / 12)"
+    approve_bad: "-(AMT_CREDIT * ead_rate * lgd)"
+    reject_good: "-reject_good_capture * approve_good"
+    reject_bad: "reject_bad_loss_avoidance * (AMT_CREDIT * ead_rate * lgd)"
+  costs:
+    processing_cost: "30 + 0.0005 * AMT_CREDIT"
+    review_cost: "90 + 0.0010 * AMT_CREDIT"
+
+sensitivity_analysis:
+  scenarios:
+    base:
+      net_margin_rate_annual: 0.14
+      base_lgd: 0.75
+      ead_rate: 0.85
+      reject_good_capture: 0.70
+      cost_multiplier: 1.00
+    low_margin:
+      net_margin_rate_annual: 0.10
+      base_lgd: 0.75
+      ead_rate: 0.85
+      reject_good_capture: 0.70
+      cost_multiplier: 1.00
+    high_loss:
+      net_margin_rate_annual: 0.14
+      base_lgd: 0.85
+      ead_rate: 0.90
+      reject_good_capture: 0.70
+      cost_multiplier: 1.00
+    high_opex:
+      net_margin_rate_annual: 0.14
+      base_lgd: 0.75
+      ead_rate: 0.85
+      reject_good_capture: 0.70
+      cost_multiplier: 1.50
+    combined_stress:
+      net_margin_rate_annual: 0.10
+      base_lgd: 0.85
+      ead_rate: 0.90
+      reject_good_capture: 0.80
+      cost_multiplier: 1.50
