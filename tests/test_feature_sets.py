@@ -17,7 +17,9 @@ from credit_visable.features.feature_sets import (
     FEATURE_SET_TRADITIONAL_CORE,
     FEATURE_SET_TRADITIONAL_PLUS_PROXY,
     build_feature_set_manifest,
+    is_protected_feature,
     is_proxy_feature,
+    is_training_restricted_feature,
     resolve_feature_set_columns,
     select_feature_set_frame,
 )
@@ -51,6 +53,14 @@ def test_is_proxy_feature_covers_explicit_proxy_families() -> None:
     assert is_proxy_feature("ORGANIZATION_TYPE") is True
     assert is_proxy_feature("FLAG_DOCUMENT_21") is True
     assert is_proxy_feature("AMT_INCOME_TOTAL") is False
+
+
+def test_training_policy_flags_protected_and_restricted_features() -> None:
+    assert is_protected_feature("CODE_GENDER") is True
+    assert is_protected_feature("DAYS_BIRTH") is True
+    assert is_training_restricted_feature("ORGANIZATION_TYPE") is True
+    assert is_training_restricted_feature("REG_CITY_NOT_WORK_CITY") is True
+    assert is_training_restricted_feature("EXT_SOURCE_1") is False
 
 
 def test_resolve_feature_set_columns_excludes_proxy_fields_from_traditional_core() -> None:
@@ -130,3 +140,21 @@ def test_build_feature_set_manifest_reports_disjoint_traditional_and_proxy_colum
         manifest["proxy_feature_columns"]
     )
     assert "Proxy refers only to internal proxy variables" in manifest["proxy_definition"]["note"]
+
+
+def test_resolve_feature_set_columns_training_mode_excludes_sensitive_inputs() -> None:
+    frame = _sample_application_frame()
+
+    selected_columns = resolve_feature_set_columns(
+        frame.columns.tolist(),
+        feature_set_name=FEATURE_SET_TRADITIONAL_PLUS_PROXY,
+        target_column="TARGET",
+        id_column="SK_ID_CURR",
+        training_mode=True,
+    )
+
+    assert "CODE_GENDER" not in selected_columns
+    assert "REGION_POPULATION_RELATIVE" not in selected_columns
+    assert "REG_CITY_NOT_WORK_CITY" not in selected_columns
+    assert "ORGANIZATION_TYPE" not in selected_columns
+    assert "EXT_SOURCE_1" in selected_columns

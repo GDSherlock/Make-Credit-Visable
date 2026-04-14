@@ -6,3 +6,6 @@ seaborn
 jupyter
 pyyaml
 pytest
+python-docx
+xgboost
+shap

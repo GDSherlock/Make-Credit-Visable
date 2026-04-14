@@ -8,6 +8,18 @@ import numpy as np
 import pandas as pd
 
 
+def _coerce_group_labels(
+    values: pd.Series,
+    *,
+    missing_label: str = "Missing",
+) -> pd.Series:
+    """Return stable object labels without pandas silent downcast warnings."""
+
+    series = values.astype("object").copy()
+    coerced = series.where(series.notna(), missing_label)
+    return pd.Series(coerced, index=values.index, name=values.name)
+
+
 def fairness_report_placeholder(
     frame: pd.DataFrame,
     target_column: str,
@@ -55,8 +67,11 @@ def derive_age_band_from_days_birth(
         right=False,
         include_lowest=True,
     )
-    output = age_band.astype("object").fillna(missing_label)
-    return pd.Series(output, index=days_birth.index, name="age_band")
+    output = _coerce_group_labels(
+        pd.Series(age_band, index=days_birth.index, name="age_band"),
+        missing_label=missing_label,
+    )
+    return output
 
 
 def collapse_rare_categories(
@@ -100,7 +115,10 @@ def build_grouped_operational_summary(
         raise KeyError(f"Frame missing required columns: {sorted(missing)}")
 
     working = frame[[group_column, target_column, score_column]].copy()
-    working[group_column] = working[group_column].astype("object").fillna("Missing")
+    working[group_column] = _coerce_group_labels(
+        working[group_column],
+        missing_label="Missing",
+    )
     working[target_column] = pd.to_numeric(working[target_column], errors="coerce").fillna(0)
     working[score_column] = pd.to_numeric(working[score_column], errors="coerce").fillna(0.0)
     working["approved_flag"] = (working[score_column] < threshold).astype(int)
@@ -199,8 +217,9 @@ def _prepare_group_series(
             missing_label=spec.get("missing_label", "Missing"),
         )
     else:
-        grouped = frame[source_column].astype("object").fillna(
-            spec.get("missing_label", "Missing")
+        grouped = _coerce_group_labels(
+            frame[source_column],
+            missing_label=spec.get("missing_label", "Missing"),
         )
 
     grouped.name = group_column
@@ -258,7 +277,10 @@ def _build_group_decision_detail(
     threshold: float,
 ) -> pd.DataFrame:
     working = frame[[group_column, target_column, score_column]].copy()
-    working[group_column] = working[group_column].astype("object").fillna("Missing")
+    working[group_column] = _coerce_group_labels(
+        working[group_column],
+        missing_label="Missing",
+    )
     working[target_column] = pd.to_numeric(working[target_column], errors="coerce")
     working[score_column] = pd.to_numeric(working[score_column], errors="coerce")
     working = working.dropna(subset=[target_column, score_column])

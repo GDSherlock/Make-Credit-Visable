@@ -22,11 +22,11 @@ def train_logistic_baseline(
     workflow as well as dense pandas inputs.
     """
 
-    resolved_model_kwargs = {"solver": "saga"}
+    resolved_model_kwargs = {"solver": "saga", "n_jobs": -1, "tol": 1e-3}
     resolved_model_kwargs.update(model_kwargs)
 
     model = LogisticRegression(
-        max_iter=1000,
+        max_iter=5000,
         class_weight="balanced",
         random_state=random_state,
         **resolved_model_kwargs,

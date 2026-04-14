@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from scipy import sparse
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -13,7 +14,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, StandardScaler
 
 from credit_visable.features.feature_sets import (
     FEATURE_SET_TRADITIONAL_CORE,
@@ -22,7 +23,13 @@ from credit_visable.features.feature_sets import (
     resolve_feature_set_columns,
     validate_feature_set_name,
 )
+from credit_visable.features.application_features import (
+    ApplicationFeatureEngineeringOptions,
+    build_application_feature_summary,
+    engineer_application_features,
+)
 from credit_visable.features.iv_woe import compute_iv_summary
+from credit_visable.features.review import FeatureReviewOptions, prune_training_features
 from credit_visable.utils.paths import get_paths
 
 
@@ -55,6 +62,72 @@ class PreparedPreprocessingArtifacts:
     id_column: str | None
 
 
+@dataclass(slots=True)
+class GovernedSplitOptions:
+    """Three-way split configuration for governed modeling."""
+
+    calibration_size: float = 0.20
+    test_size: float = 0.20
+    random_state: int = 42
+
+
+@dataclass(slots=True)
+class GovernedPreprocessingArtifacts:
+    """Preprocessing outputs for the governed dev/calibration/test pipeline."""
+
+    feature_set_name: str
+    preprocessing_options: PreprocessingOptions
+    split_options: GovernedSplitOptions
+    feature_engineering_options: ApplicationFeatureEngineeringOptions
+    feature_review_options: FeatureReviewOptions
+    feature_groups: dict[str, list[str]]
+    preprocessor: ColumnTransformer
+    X_dev: sparse.csr_matrix
+    X_calibration: sparse.csr_matrix
+    X_test: sparse.csr_matrix
+    y_dev: pd.Series
+    y_calibration: pd.Series
+    y_test: pd.Series
+    dev_ids: pd.Series | None
+    calibration_ids: pd.Series | None
+    test_ids: pd.Series | None
+    feature_names: list[str]
+    target_column: str
+    id_column: str | None
+    selected_feature_columns: list[str]
+    dropped_feature_columns: list[str]
+    feature_engineering_summary: dict[str, object]
+    split_manifest: dict[str, object]
+    iv_summary: pd.DataFrame
+    high_correlation_pairs: pd.DataFrame
+    vif_summary: pd.DataFrame
+    pca_summary: pd.DataFrame
+
+    @property
+    def X_train(self) -> sparse.csr_matrix:
+        return self.X_dev
+
+    @property
+    def X_valid(self) -> sparse.csr_matrix:
+        return self.X_test
+
+    @property
+    def y_train(self) -> pd.Series:
+        return self.y_dev
+
+    @property
+    def y_valid(self) -> pd.Series:
+        return self.y_test
+
+    @property
+    def train_ids(self) -> pd.Series | None:
+        return self.dev_ids
+
+    @property
+    def valid_ids(self) -> pd.Series | None:
+        return self.test_ids
+
+
 class QuantileClipper(BaseEstimator, TransformerMixin):
     """Clip numeric features to fitted quantile bounds when requested."""
 
@@ -72,6 +145,14 @@ class QuantileClipper(BaseEstimator, TransformerMixin):
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
         frame = _coerce_frame(X, columns=getattr(self, "columns_", None))
         return frame.clip(self.lower_bounds_, self.upper_bounds_, axis=1)
+
+    def get_feature_names_out(
+        self,
+        input_features: list[str] | np.ndarray | None = None,
+    ) -> np.ndarray:
+        if input_features is None:
+            input_features = getattr(self, "columns_", [])
+        return np.asarray(list(input_features), dtype=object)
 
 
 def _coerce_frame(
@@ -277,6 +358,13 @@ def build_basic_preprocessor(
     numeric_pipeline = _build_numeric_pipeline(resolved_options)
     categorical_pipeline = Pipeline(
         steps=[
+            (
+                "to_object",
+                FunctionTransformer(
+                    lambda values: _coerce_frame(values).astype("object"),
+                    feature_names_out="one-to-one",
+                ),
+            ),
             ("imputer", SimpleImputer(strategy="most_frequent")),
             (
                 "encoder",
@@ -295,6 +383,172 @@ def build_basic_preprocessor(
             ("categorical", categorical_pipeline, feature_groups.get("categorical", [])),
         ],
         remainder="drop",
+    )
+
+
+def _validate_governed_split_options(options: GovernedSplitOptions) -> None:
+    if not 0.0 < float(options.calibration_size) < 1.0:
+        raise ValueError("calibration_size must be between 0 and 1.")
+    if not 0.0 < float(options.test_size) < 1.0:
+        raise ValueError("test_size must be between 0 and 1.")
+    if float(options.calibration_size) + float(options.test_size) >= 1.0:
+        raise ValueError("calibration_size + test_size must be less than 1.")
+
+
+def _hash_series(values: pd.Series | None) -> str | None:
+    if values is None or values.empty:
+        return None
+    hashed = pd.util.hash_pandas_object(values.reset_index(drop=True), index=False)
+    return str(int(hashed.sum()))
+
+
+def prepare_governed_preprocessing_artifacts(
+    frame: pd.DataFrame,
+    *,
+    feature_set_name: str,
+    target_column: str,
+    id_column: str | None = None,
+    preprocessing_options: PreprocessingOptions | None = None,
+    split_options: GovernedSplitOptions | None = None,
+    feature_engineering_options: ApplicationFeatureEngineeringOptions | None = None,
+    feature_review_options: FeatureReviewOptions | None = None,
+) -> GovernedPreprocessingArtifacts:
+    """Prepare governed dev/calibration/test preprocessing artifacts."""
+
+    if target_column not in frame.columns:
+        raise KeyError(f"Target column '{target_column}' was not found in the input frame.")
+
+    resolved_feature_set = validate_feature_set_name(feature_set_name)
+    resolved_preprocessing_options = preprocessing_options or PreprocessingOptions(
+        clip_quantiles=(0.01, 0.99)
+    )
+    resolved_split_options = split_options or GovernedSplitOptions()
+    resolved_feature_engineering_options = (
+        feature_engineering_options or ApplicationFeatureEngineeringOptions()
+    )
+    resolved_feature_review_options = feature_review_options or FeatureReviewOptions()
+    _validate_governed_split_options(resolved_split_options)
+
+    engineered_frame = engineer_application_features(
+        frame,
+        options=resolved_feature_engineering_options,
+    )
+    candidate_feature_columns = resolve_feature_set_columns(
+        engineered_frame.columns.tolist(),
+        feature_set_name=resolved_feature_set,
+        target_column=target_column,
+        id_column=id_column,
+        training_mode=True,
+    )
+    if "DAYS_EMPLOYED_CLEAN" in candidate_feature_columns and "DAYS_EMPLOYED" in candidate_feature_columns:
+        candidate_feature_columns = [
+            "DAYS_EMPLOYED_CLEAN" if column_name == "DAYS_EMPLOYED" else column_name
+            for column_name in candidate_feature_columns
+        ]
+        deduped_columns: list[str] = []
+        for column_name in candidate_feature_columns:
+            if column_name not in deduped_columns:
+                deduped_columns.append(column_name)
+        candidate_feature_columns = deduped_columns
+
+    full_index = engineered_frame.index.to_numpy()
+    development_and_calibration_index, test_index = train_test_split(
+        full_index,
+        test_size=resolved_split_options.test_size,
+        stratify=engineered_frame[target_column],
+        random_state=resolved_split_options.random_state,
+    )
+    development_and_calibration_frame = engineered_frame.loc[
+        development_and_calibration_index
+    ].copy()
+    development_index, calibration_index = train_test_split(
+        development_and_calibration_frame.index.to_numpy(),
+        test_size=float(resolved_split_options.calibration_size)
+        / float(1.0 - resolved_split_options.test_size),
+        stratify=development_and_calibration_frame[target_column],
+        random_state=resolved_split_options.random_state,
+    )
+
+    dev_frame = engineered_frame.loc[development_index].copy()
+    calibration_frame = engineered_frame.loc[calibration_index].copy()
+    test_frame = engineered_frame.loc[test_index].copy()
+
+    feature_review = prune_training_features(
+        dev_frame[[target_column, *candidate_feature_columns]],
+        feature_columns=candidate_feature_columns,
+        target_column=target_column,
+        options=resolved_feature_review_options,
+    )
+    selected_feature_columns = feature_review["selected_feature_columns"]
+
+    feature_groups = split_feature_types(dev_frame[selected_feature_columns + []].copy())
+    preprocessor = build_basic_preprocessor(feature_groups, options=resolved_preprocessing_options)
+
+    X_dev_frame = dev_frame[selected_feature_columns].copy()
+    X_calibration_frame = calibration_frame[selected_feature_columns].copy()
+    X_test_frame = test_frame[selected_feature_columns].copy()
+
+    X_dev = sparse.csr_matrix(preprocessor.fit_transform(X_dev_frame))
+    X_calibration = sparse.csr_matrix(preprocessor.transform(X_calibration_frame))
+    X_test = sparse.csr_matrix(preprocessor.transform(X_test_frame))
+    feature_names = preprocessor.get_feature_names_out().tolist()
+
+    dev_ids = dev_frame[id_column].reset_index(drop=True) if id_column and id_column in dev_frame.columns else None
+    calibration_ids = (
+        calibration_frame[id_column].reset_index(drop=True)
+        if id_column and id_column in calibration_frame.columns
+        else None
+    )
+    test_ids = test_frame[id_column].reset_index(drop=True) if id_column and id_column in test_frame.columns else None
+
+    split_manifest = {
+        "split_strategy": "dev_calibration_test",
+        "feature_set_name": resolved_feature_set,
+        "development_rows": int(len(dev_frame)),
+        "calibration_rows": int(len(calibration_frame)),
+        "test_rows": int(len(test_frame)),
+        "development_bad_rate": float(dev_frame[target_column].mean()),
+        "calibration_bad_rate": float(calibration_frame[target_column].mean()),
+        "test_bad_rate": float(test_frame[target_column].mean()),
+        "development_id_hash": _hash_series(dev_ids),
+        "calibration_id_hash": _hash_series(calibration_ids),
+        "test_id_hash": _hash_series(test_ids),
+        "selected_feature_count": len(selected_feature_columns),
+        "dropped_feature_count": len(feature_review["dropped_feature_columns"]),
+    }
+
+    return GovernedPreprocessingArtifacts(
+        feature_set_name=resolved_feature_set,
+        preprocessing_options=resolved_preprocessing_options,
+        split_options=resolved_split_options,
+        feature_engineering_options=resolved_feature_engineering_options,
+        feature_review_options=resolved_feature_review_options,
+        feature_groups=feature_groups,
+        preprocessor=preprocessor,
+        X_dev=X_dev,
+        X_calibration=X_calibration,
+        X_test=X_test,
+        y_dev=dev_frame[target_column].reset_index(drop=True),
+        y_calibration=calibration_frame[target_column].reset_index(drop=True),
+        y_test=test_frame[target_column].reset_index(drop=True),
+        dev_ids=dev_ids,
+        calibration_ids=calibration_ids,
+        test_ids=test_ids,
+        feature_names=feature_names,
+        target_column=target_column,
+        id_column=id_column,
+        selected_feature_columns=selected_feature_columns,
+        dropped_feature_columns=feature_review["dropped_feature_columns"],
+        feature_engineering_summary=build_application_feature_summary(
+            frame,
+            engineered_frame,
+            options=resolved_feature_engineering_options,
+        ),
+        split_manifest=split_manifest,
+        iv_summary=feature_review["iv_summary"],
+        high_correlation_pairs=feature_review["high_correlation_pairs"],
+        vif_summary=feature_review["vif_summary"],
+        pca_summary=feature_review["pca_summary"],
     )
 
 
@@ -442,5 +696,95 @@ def save_preprocessing_artifacts(
         },
     }
     file_map["manifest"].write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    return file_map
+
+
+def save_governed_preprocessing_artifacts(
+    artifacts: GovernedPreprocessingArtifacts,
+    output_dir: str | Path | None = None,
+) -> dict[str, Path]:
+    """Persist governed preprocessing artifacts under one directory."""
+
+    destination = (
+        Path(output_dir) if output_dir is not None else get_paths().data_processed / "preprocessing"
+    )
+    destination.mkdir(parents=True, exist_ok=True)
+
+    file_map = {
+        "X_dev": destination / "X_dev.npz",
+        "X_calibration": destination / "X_calibration.npz",
+        "X_test": destination / "X_test.npz",
+        "X_train": destination / "X_train.npz",
+        "X_valid": destination / "X_valid.npz",
+        "dev_meta": destination / "dev_meta.csv",
+        "calibration_meta": destination / "calibration_meta.csv",
+        "test_meta": destination / "test_meta.csv",
+        "train_meta": destination / "train_meta.csv",
+        "valid_meta": destination / "valid_meta.csv",
+        "feature_names": destination / "feature_names.csv",
+        "split_manifest": destination / "split_manifest.json",
+        "feature_engineering_summary": destination / "feature_engineering_summary.json",
+        "iv_summary": destination / "iv_summary.csv",
+        "high_correlation_pairs": destination / "high_correlation_pairs.csv",
+        "vif_summary": destination / "vif_summary.csv",
+        "pca_summary": destination / "pca_summary.csv",
+    }
+
+    sparse.save_npz(file_map["X_dev"], artifacts.X_dev)
+    sparse.save_npz(file_map["X_calibration"], artifacts.X_calibration)
+    sparse.save_npz(file_map["X_test"], artifacts.X_test)
+    sparse.save_npz(file_map["X_train"], artifacts.X_dev)
+    sparse.save_npz(file_map["X_valid"], artifacts.X_test)
+
+    dev_meta = _build_meta_frame(
+        ids=artifacts.dev_ids,
+        targets=artifacts.y_dev,
+        id_column=artifacts.id_column,
+        target_column=artifacts.target_column,
+    )
+    calibration_meta = _build_meta_frame(
+        ids=artifacts.calibration_ids,
+        targets=artifacts.y_calibration,
+        id_column=artifacts.id_column,
+        target_column=artifacts.target_column,
+    )
+    test_meta = _build_meta_frame(
+        ids=artifacts.test_ids,
+        targets=artifacts.y_test,
+        id_column=artifacts.id_column,
+        target_column=artifacts.target_column,
+    )
+
+    dev_meta.to_csv(file_map["dev_meta"], index=False)
+    calibration_meta.to_csv(file_map["calibration_meta"], index=False)
+    test_meta.to_csv(file_map["test_meta"], index=False)
+    dev_meta.to_csv(file_map["train_meta"], index=False)
+    test_meta.to_csv(file_map["valid_meta"], index=False)
+    pd.DataFrame({"feature_name": artifacts.feature_names}).to_csv(
+        file_map["feature_names"],
+        index=False,
+    )
+    file_map["split_manifest"].write_text(
+        json.dumps(
+            {
+                **artifacts.split_manifest,
+                "feature_groups": artifacts.feature_groups,
+                "selected_feature_columns": artifacts.selected_feature_columns,
+                "dropped_feature_columns": artifacts.dropped_feature_columns,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    file_map["feature_engineering_summary"].write_text(
+        json.dumps(artifacts.feature_engineering_summary, indent=2),
+        encoding="utf-8",
+    )
+
+    artifacts.iv_summary.to_csv(file_map["iv_summary"], index=False)
+    artifacts.high_correlation_pairs.to_csv(file_map["high_correlation_pairs"], index=False)
+    artifacts.vif_summary.to_csv(file_map["vif_summary"], index=False)
+    artifacts.pca_summary.to_csv(file_map["pca_summary"], index=False)
 
     return file_map

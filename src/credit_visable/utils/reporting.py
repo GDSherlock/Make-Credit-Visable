@@ -20,12 +20,12 @@ def to_builtin(value: Any) -> Any:
         return [to_builtin(item) for item in value.tolist()]
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, (np.bool_, bool)):
+        return bool(value)
     if isinstance(value, (np.floating, float)):
         return None if not np.isfinite(value) else float(value)
     if isinstance(value, (np.integer, int)):
         return int(value)
-    if isinstance(value, (np.bool_, bool)):
-        return bool(value)
     if pd.isna(value):
         return None
     return value
@@ -53,4 +53,19 @@ def build_report_summary_fields(
         "key_findings": [str(item) for item in key_findings],
         "business_implications": [str(item) for item in business_implications],
         "figure_manifest": build_figure_manifest(figure_paths or {}),
+    }
+
+
+def build_figure_quality_fields(
+    *,
+    original_paths: dict[str, str | Path] | None = None,
+    repaired_paths: dict[str, str | Path] | None = None,
+    quality_status: str,
+) -> dict[str, Any]:
+    """Build standard figure-manifest fields for original and repaired outputs."""
+
+    return {
+        "figure_manifest_original": build_figure_manifest(original_paths or {}),
+        "figure_manifest_v2": build_figure_manifest(repaired_paths or {}),
+        "figure_quality_status": str(quality_status),
     }
